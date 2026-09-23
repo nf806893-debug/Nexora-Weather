@@ -80,7 +80,14 @@ async function fetchJSON(url, timeoutMs) {
   const t = setTimeout(() => ctl.abort(), timeoutMs || 12000);
   try {
     const res = await fetch(url, { signal: ctl.signal });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      /* Open-Meteo returns a JSON body like {"error":true,"reason":"..."} on 4xx —
+         surface that reason instead of a bare status code so real bugs are visible. */
+      let reason = '';
+      try { const body = await res.json(); reason = body && body.reason ? body.reason : ''; }
+      catch (e) { /* body wasn't JSON — ignore */ }
+      throw new Error('HTTP ' + res.status + (reason ? ': ' + reason : ''));
+    }
     return await res.json();
   } finally { clearTimeout(t); }
 }
@@ -1633,7 +1640,7 @@ async function loadWeather(reason) {
       showOffline('Network problem — showing the last data retrieved for this location.', cached.time);
     } else {
       state.weather = null;
-      showOffline('Could not load weather (' + (err.name === 'AbortError' ? 'request timed out' : 'network error') + '). Check your connection and retry.', 0);
+      showOffline('Could not load weather (' + (err.name === 'AbortError' ? 'request timed out' : (err.message || 'network error')) + '). Check your connection and retry.', 0);
     }
   } finally {
     state.loading = false;
