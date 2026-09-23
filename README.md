@@ -1,5 +1,5 @@
 # Nexora Weather v1.0
-#**CURRENTLY BROKEN!**
+# **CURRENTLY BROKEN!**
 
 A complete, fully client-side weather application with extreme customization.
 No API key, no backend, no build step, no frameworks — plain HTML/CSS/vanilla JS.
