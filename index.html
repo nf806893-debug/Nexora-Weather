@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Nexora Weather — a fully customizable weather app powered by the free Open-Meteo API.">
+<title>Nexora Weather</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Background layers -->
+  <div id="bg-layer" aria-hidden="true"></div>
+  <canvas id="fx-canvas" aria-hidden="true"></canvas>
+
+  <div class="app" id="app">
+    <!-- ===================== HEADER ===================== -->
+    <header class="topbar" role="banner">
+      <div class="topbar-inner">
+        <a class="brand" href="#" id="brand" aria-label="Nexora Weather home">
+          <span class="brand-mark" id="brand-icon" aria-hidden="true"></span>
+          <span class="brand-name">Nexora</span>
+        </a>
+
+        <div class="searchbox" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="search-results" aria-label="Search for a location">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="Search city, region, ZIP or country…  ( / )"
+                 aria-label="Search for a city, region, postal code or country" role="searchbox">
+          <button class="icon-btn search-clear hidden" id="search-clear" aria-label="Clear search" tabindex="-1">&#10005;</button>
+          <div id="search-results" class="search-results" role="listbox" aria-label="Location search results"></div>
+        </div>
+
+        <nav class="top-actions" aria-label="Quick actions">
+          <span id="clock" class="clock" aria-live="off" title="Local time at the selected location"></span>
+          <button class="icon-btn" id="btn-locate" title="Use my location" aria-label="Use my current location">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-locations" title="Saved locations" aria-label="Saved locations" aria-expanded="false" aria-controls="loc-popover">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-5.1-7-11a7 7 0 0 1 14 0c0 5.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-themes" title="Themes" aria-label="Manage themes">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18c1.5 0 2-.8 2-1.8 0-.9-.7-1.4-.7-2.4 0-1 .8-1.8 1.9-1.8H17a4 4 0 0 0 4-4.1C20.6 6.2 16.8 3 12 3z"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-refresh" title="Refresh weather data" aria-label="Refresh weather data">
+            <svg viewBox="0 0 24 24" aria-hidden="true" id="refresh-icon"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Open settings" aria-expanded="false" aria-controls="settings-modal">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          </button>
+        </nav>
+      </div>
+      <div id="offline-banner" class="offline-banner hidden" role="status">
+        <span id="offline-msg">You are offline — showing the last available data.</span>
+        <span class="offline-meta" id="offline-meta"></span>
+        <button class="btn small" id="retry-btn">Retry</button>
+      </div>
+    </header>
+
+    <!-- ===================== MAIN ===================== -->
+    <main class="wrap" id="main">
+      <div id="dashboard" class="dashboard" aria-live="polite"></div>
+      <noscript><p class="noscript-note">Nexora Weather needs JavaScript to run. Please enable JavaScript and reload.</p></noscript>
+    </main>
+
+    <footer class="footer" id="attribution">
+      <p>Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0) &middot; Geocoding by Open-Meteo &middot; Nexora Weather v1.0</p>
+    </footer>
+  </div>
+
+  <!-- ===================== SAVED LOCATIONS POPOVER ===================== -->
+  <div class="popover hidden" id="loc-popover" role="dialog" aria-label="Saved locations">
+    <div class="popover-head">
+      <h2>Saved locations</h2>
+      <button class="icon-btn" data-close-popover aria-label="Close saved locations">&#10005;</button>
+    </div>
+    <button class="btn ghost full" id="loc-use-gps">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+      Use my current location
+    </button>
+    <ul id="loc-list" class="loc-list" aria-label="Saved location list"></ul>
+    <p class="popover-hint">Drag items or use the arrows to reorder. Click the pencil to rename.</p>
+  </div>
+
+  <!-- ===================== SETTINGS MODAL ===================== -->
+  <div class="modal hidden" id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel settings-panel">
+      <div class="modal-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" data-close-modal aria-label="Close settings">&#10005;</button>
+      </div>
+      <div class="settings-body">
+        <nav class="settings-nav" id="settings-nav" aria-label="Settings categories"></nav>
+        <div class="settings-content" id="settings-content" tabindex="-1"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== THEMES MODAL ===================== -->
+  <div class="modal hidden" id="themes-modal" role="dialog" aria-modal="true" aria-label="Theme manager">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel themes-panel">
+      <div class="modal-head">
+        <h2>Themes</h2>
+        <button class="icon-btn" data-close-modal aria-label="Close themes">&#10005;</button>
+      </div>
+      <div class="themes-body" id="themes-body"></div>
+    </div>
+  </div>
+
+  <!-- ===================== DETAIL MODAL ===================== -->
+  <div class="modal hidden" id="detail-modal" role="dialog" aria-modal="true" aria-label="Detailed weather information">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel detail-panel">
+      <div class="modal-head">
+        <h2>Weather details</h2>
+        <button class="icon-btn" data-close-modal aria-label="Close details">&#10005;</button>
+      </div>
+      <div class="detail-body" id="detail-content"></div>
+    </div>
+  </div>
+
+  <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
