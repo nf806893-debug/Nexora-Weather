@@ -465,7 +465,7 @@ function forecastUrl(loc) {
     '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,snowfall,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m' +
     '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,rain,snowfall,weather_code,cloud_cover,visibility,pressure_msl,surface_pressure,wind_speed_10m,wind_gusts_10m,uv_index,is_day' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,precipitation_sum,rain_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset,uv_index_max' +
-    '&timezone=auto&forecast_days=16&wind_speed_unit=kmh&precipitation_unit=mm&timeformat=unix';
+    '&timezone=auto&forecast_days=16&wind_speed_unit=kmh&precipitation_unit=mm&timeformat=unixtime';
 }
 async function fetchForecast(loc) { return fetchJSON(forecastUrl(loc), 15000); }
 async function fetchAQI(loc) {
