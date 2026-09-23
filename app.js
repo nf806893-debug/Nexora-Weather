@@ -4,7 +4,7 @@
    A fully customizable weather application.
    Data sources (free, no API key required):
      - Open-Meteo Forecast API      https://api.open-meteo.com
-     - Open-Meteo Geocoding API     https://geocoding-api.open-meteo.com
+     - Open-Meteo Geocoding API     https://georaphy-api... (see below)
      - Open-Meteo Air Quality API   https://air-quality-api.open-meteo.com
      - BigDataCloud reverse geocode https://api.bigdatacloud.net (free, no key)
    Everything runs client-side; preferences persist in localStorage.
@@ -185,6 +185,8 @@ function defaultDashboard() {
 }
 
 /* ============================ 4. BUILT-IN THEMES ============================ */
+/* A theme = named set of appearance overrides. Users can also create,
+   duplicate, rename, export and import their own themes. */
 const BUILTIN_THEMES = [
   { id: 'default', name: 'Default', overrides: {} },
   { id: 'dark', name: 'Dark', overrides: {
@@ -225,15 +227,15 @@ const BUILTIN_THEMES = [
 
 /* ============================ 5. STATE ============================ */
 const state = {
-  settings: null,
-  customThemes: [],
-  locations: [],
-  activeLoc: null,
-  gps: null,
-  weather: null,
-  aqi: null,
+  settings: null,        // merged settings object
+  customThemes: [],      // user-created themes
+  locations: [],         // saved locations
+  activeLoc: null,       // location id | 'gps'
+  gps: null,             // { lat, lon, label }
+  weather: null,         // last forecast payload
+  aqi: null,             // last air-quality payload
   loading: false,
-  source: 'live',
+  source: 'live',        // 'live' | 'cached'
   lastLoad: 0,
   activeCat: 'appearance',
   searchActive: -1
@@ -249,6 +251,7 @@ function loadAll() {
   state.settings.dashboard = (Array.isArray(dash) && dash.length)
     ? dash
     : defaultDashboard();
+  /* make sure any new widgets get added at the end */
   const known = new Set(state.settings.dashboard.map(d => d.id));
   for (const w of WIDGETS) if (!known.has(w.id)) state.settings.dashboard.push({ id: w.id, visible: true, size: w.def, mode: 'normal' });
 
@@ -299,6 +302,7 @@ function compass(deg) {
   const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   return dirs[Math.round(deg / 22.5) % 16] + ' ' + Math.round(deg) + '°';
 }
+/* time zone used for weather display: location tz ('auto') or device tz */
 function tzName() {
   if (state.settings.time.tz === 'device') return undefined;
   return (state.weather && state.weather.timezone) || undefined;
@@ -364,11 +368,13 @@ function aqiLevel(aqi) {
   if (aqi <= 300) return { label: 'Very unhealthy', color: '#a855f7' };
   return { label: 'Hazardous', color: '#7f1d1d' };
 }
+
+/* moon phase — simple synodic-month calculation (no external API needed) */
 function moonInfo(dateMs) {
   const synodic = 29.53058867;
   const ref = Date.UTC(2000, 0, 6, 18, 14);
   const days = ((dateMs - ref) / 86400000) % synodic;
-  const phase = ((days % synodic) + synodic) % synodic;
+  const phase = ((days % synodic) + synodic) % synodic; // 0..29.53 days since new moon
   const illum = (1 - Math.cos(2 * Math.PI * phase / synodic)) / 2;
   const names = ['New Moon', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous',
     'Full Moon', 'Waning Gibbous', 'Last Quarter', 'Waning Crescent'];
@@ -377,6 +383,8 @@ function moonInfo(dateMs) {
 }
 
 /* ============================ 7. SVG ICON SYSTEM ============================ */
+/* Lightweight hand-drawn stroke icons, mapped from Open-Meteo WMO codes.
+   Day/night variants included where relevant. */
 const ICON_PARTS = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 1.8v2.4M12 19.8v2.4M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M1.8 12h2.4M19.8 12h2.4M4.6 19.4l1.7-1.7M17.7 6.3l1.7-1.7"/>',
   moon: '<path d="M20.6 13.2A8.8 8.8 0 1 1 10.8 3.4a7 7 0 0 0 9.8 9.8z"/>',
@@ -391,7 +399,8 @@ const ICON_PARTS = {
 };
 function iconName(code, isDay) {
   if (code === 0) return isDay === false ? 'moon' : 'sun';
-  if (code === 1 || code === 2) return isDay === false ? 'moon-cloud' : 'sun-cloud';
+  if (code === 1) return isDay === false ? 'moon-cloud' : 'sun-cloud';
+  if (code === 2) return isDay === false ? 'moon-cloud' : 'sun-cloud';
   if (code === 3) return 'cloud';
   if (code === 45 || code === 48) return 'fog';
   if (code >= 51 && code <= 57) return 'drizzle';
@@ -417,6 +426,7 @@ function currentLocation() {
   }
   const loc = state.locations.find(l => l.id === state.activeLoc) || state.locations[0];
   if (loc) return { key: loc.id, label: loc.name, lat: loc.lat, lon: loc.lon, tz: loc.tz };
+  /* first-run fallback: New York City */
   return { key: 'default', label: 'New York', lat: 40.7143, lon: -74.006, cc: 'US' };
 }
 function locFromGeocodeResult(r) {
@@ -442,17 +452,14 @@ async function reverseGeocode(lat, lon) {
     return [j.city || j.locality, j.principalSubdivision || j.countryName].filter(Boolean).join(', ') || 'Current location';
   } catch (e) { return 'Current location'; }
 }
-
-/* FIXED: Corrected timeformat to 'unixtime' and fixed daily parameters (removed duplicate max temperature, added apparent_temperature_max) */
 function forecastUrl(loc) {
   return FORECAST_URL +
     '?latitude=' + loc.lat + '&longitude=' + loc.lon +
     '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,snowfall,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m' +
     '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,rain,snowfall,weather_code,cloud_cover,visibility,pressure_msl,surface_pressure,wind_speed_10m,wind_gusts_10m,uv_index,is_day' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,precipitation_sum,rain_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset,uv_index_max' +
-    '&timezone=auto&forecast_days=16&wind_speed_unit=kmh&precipitation_unit=mm&timeformat=unixtime';
+    '&timezone=auto&forecast_days=16&wind_speed_unit=kmh&precipitation_unit=mm&timeformat=unix';
 }
-
 async function fetchForecast(loc) { return fetchJSON(forecastUrl(loc), 15000); }
 async function fetchAQI(loc) {
   const url = AQI_URL + '?latitude=' + loc.lat + '&longitude=' + loc.lon +
@@ -467,7 +474,7 @@ function validForecast(j) {
 /* ============================ 10. CACHE (offline support) ============================ */
 function cacheKey(loc) { return 'cache-' + loc.key + '-' + Math.round(loc.lat * 100) + '-' + Math.round(loc.lon * 100); }
 function cacheSet(loc, payload) {
-  try { store.set(cacheKey(loc), { time: Date.now(), w: payload.w, a: payload.a }); } catch (e) { /* quota */ }
+  try { store.set(cacheKey(loc), { time: Date.now(), w: payload.w, a: payload.a }); } catch (e) { /* quota — non-fatal */ }
 }
 function cacheGet(loc) { return store.get(cacheKey(loc), null); }
 
@@ -475,6 +482,7 @@ function cacheGet(loc) { return store.get(cacheKey(loc), null); }
 function findTheme(id) {
   return BUILTIN_THEMES.find(t => t.id === id) || state.customThemes.find(t => t.id === id) || null;
 }
+/* Apply a theme = reset appearance to defaults, then merge theme overrides. */
 function applyTheme(id, opts) {
   const theme = findTheme(id) || BUILTIN_THEMES[0];
   const ap = state.settings.appearance;
@@ -506,6 +514,7 @@ function hexA(hex, alpha) {
   return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + clamp(alpha, 0, 1) + ')';
 }
 
+/* write every setting into CSS custom properties — the whole UI restyles live */
 function applyAppearance() {
   const ap = state.settings.appearance;
   const r = document.documentElement.style;
@@ -558,6 +567,8 @@ function applyAppearance() {
 }
 
 /* ============================ 12. BACKGROUND ENGINE ============================ */
+/* Handles: dynamic (weather based, toggleable), solid, gradient, image,
+   and a lightweight animated canvas (rain / snow / stars / clouds). */
 function dynamicGradient(key, isDay) {
   const cc = state.settings.appearance.condColors;
   switch (key) {
@@ -614,6 +625,7 @@ function fxSpawn(kind, anywhere) {
   if (kind === 'rain') return { x: Math.random() * w, y: anywhere ? Math.random() * h : -20, l: 12 + Math.random() * 16, v: 9 + Math.random() * 7, o: 0.12 + Math.random() * 0.22 };
   if (kind === 'snow') return { x: Math.random() * w, y: anywhere ? Math.random() * h : -10, r: 1 + Math.random() * 2.4, v: 0.5 + Math.random() * 1.1, sway: Math.random() * 2 * Math.PI, o: 0.25 + Math.random() * 0.5 };
   if (kind === 'stars') return { x: Math.random() * w, y: Math.random() * h * 0.75, r: 0.4 + Math.random() * 1.3, tw: Math.random() * 2 * Math.PI, ts: 0.5 + Math.random() * 1.5, o: 0.3 + Math.random() * 0.6 };
+  /* clouds */
   return { x: Math.random() * w, y: Math.random() * h * 0.5, s: 120 + Math.random() * 220, v: 0.12 + Math.random() * 0.25, o: 0.05 + Math.random() * 0.06 };
 }
 function fxLoop() {
@@ -637,7 +649,7 @@ function fxLoop() {
       const a = p.o * (0.55 + 0.45 * Math.sin(p.tw));
       ctx.fillStyle = 'rgba(226,232,255,' + a + ')';
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
-    } else {
+    } else { /* clouds */
       p.x += p.v * speed; if (p.x - p.s > FX.w) { p.x = -p.s; p.y = Math.random() * FX.h * 0.5; }
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.s);
       g.addColorStop(0, 'rgba(255,255,255,' + p.o + ')'); g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -671,6 +683,7 @@ function applyBackground() {
     if (state.settings.appearance.effects.gradient === false) {
       layer.style.background = hexA(state.settings.appearance.colors.bg, 1);
     }
+    /* subtle ambient particles for the current condition (cheap, capped) */
     const kind = fxKindFor(key);
     if (kind && ['rain', 'snow', 'stars'].includes(kind)) fxStart(kind);
   } else if (bg.type === 'solid') {
@@ -684,6 +697,7 @@ function applyBackground() {
     const kind = fxKindFor(key) || 'clouds';
     fxStart(kind === 'clouds' ? 'clouds' : kind);
   } else {
+    /* dynamic switched off */
     layer.style.background = 'linear-gradient(165deg,' + state.settings.appearance.colors.bg + ',' + state.settings.appearance.colors.bg2 + ')';
   }
 }
@@ -702,7 +716,7 @@ function buildDashboard() {
     card.draggable = true;
     card.setAttribute('aria-label', w.name + ' widget');
     card.innerHTML =
-      '<header class="widget-head"><button class="grip" title="Drag to reorder" aria-label="Drag ' + esc(w.name) + ' to reorder">⋮⋮</button>' +
+      '<header class="widget-head"><button class="grip" title="Drag to reorder (or use Dashboard settings)" aria-label="Drag ' + esc(w.name) + ' to reorder">⋮⋮</button>' +
       '<h3>' + esc(w.name) + '</h3></header>' +
       '<div class="widget-body" id="wb-' + conf.id + '"></div>';
     dash.appendChild(card);
@@ -718,9 +732,11 @@ function renderAllBodies() {
       try { fn(body, conf); } catch (e) { body.innerHTML = '<p class="search-status">Unable to render this widget.</p>'; }
     }
   }
+  updateClock();
 }
 function placeholder(body, msg) { body.innerHTML = '<p class="search-status">' + esc(msg) + '</p>'; }
 
+/* small stat widget helper */
 function statHtml(iconCode, isDay, value, label, sub) {
   return '<div class="stat"><span class="stat-icon">' + iconSvg(iconCode, isDay) + '</span>' +
     '<div><div class="stat-value">' + value + '</div><div class="stat-label">' + esc(label) + '</div>' +
@@ -778,7 +794,7 @@ const RENDERERS = {
     const sum = next.reduce((m, i) => m + (w.hourly.precipitation[i] || 0), 0);
     body.innerHTML = statHtml(61, true, uPrecip(c.precipitation), 'Precipitation now',
       'Max ' + Math.round(popMax) + '% chance in the next 24 h') +
-      (conf.mode === 'detailed' ? extraHtml([['Next 24 h total', uPrecip(sum)], ['Rain', uPrecip(c.rain || 0)], ['Snowfall', uPrecip(c.snowfall || 0)]]) : '');
+      (conf.mode === 'detailed' ? extraHtml([['Next 24 h total', uPrecip(sum)], ['Rain', uPrecip(c.rain || 0)], ['Snowfall', uPrecip(c.snowfall || 0) + (state.settings.units.precip === 'mm' ? '' : '')]]) : '');
   },
 
   wind(body, conf) {
@@ -808,6 +824,8 @@ const RENDERERS = {
 
   uv(body, conf) {
     const w = state.weather; if (!w) return placeholder(body, 'Loading…');
+    const c = w.current;
+    /* uv_index is hourly — find current hour */
     const i = nowHourIndex();
     const nowUv = w.hourly.uv_index ? w.hourly.uv_index[i] : null;
     const maxUv = w.daily.uv_index_max ? w.daily.uv_index_max[0] : null;
@@ -838,7 +856,7 @@ const RENDERERS = {
     const x = 20 + frac * 260, y = 95 - Math.sin(frac * Math.PI) * 70;
     const up = now >= sr && now <= ss;
     body.innerHTML =
-      '<div class="sun-arc-wrap" role="img" aria-label="Sun position">' +
+      '<div class="sun-arc-wrap" role="img" aria-label="Sun position: ' + Math.round(frac * 100) + '% through the day">' +
       '<svg viewBox="0 0 300 110" preserveAspectRatio="none">' +
         '<path d="M20 95 A 130 130 0 0 1 280 95" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="2" stroke-dasharray="4 5"/>' +
         '<path d="M20 95 A 130 130 0 0 1 ' + x.toFixed(1) + ' ' + y.toFixed(1) + '" fill="none" stroke="var(--cc-clear)" stroke-width="2.5"/>' +
@@ -851,6 +869,7 @@ const RENDERERS = {
   },
 
   moon(body, conf) {
+    const w = state.weather;
     const m = moonInfo(Date.now());
     body.innerHTML = statHtml(0, false, Math.round(m.illumination * 100) + '%', 'Moon illumination', m.name);
   },
@@ -893,7 +912,6 @@ const RENDERERS = {
   hourly(body) { renderHourly(body); },
   daily(body) { renderDaily(body); }
 };
-
 function fmtDuration(sec) {
   const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
   return h + ' h ' + m + ' min';
@@ -936,7 +954,7 @@ function renderHourly(body) {
 
   if (s.graph && s.metrics.length) html += '<div class="hourly-graph-wrap"><canvas class="graph" id="hourly-graph" aria-label="Hourly graph"></canvas></div>';
 
-  html += '<div class="hours-scroll" tabindex="0" aria-label="Hourly forecast">';
+  html += '<div class="hours-scroll" tabindex="0" aria-label="Hourly forecast, horizontally scrollable">';
   for (const i of idxs) {
     const t = w.hourly.time[i];
     const isNow = i === nowHourIndex();
@@ -954,6 +972,7 @@ function renderHourly(body) {
   drawHourlyGraph();
 }
 
+/* generic small line/bar chart on canvas (no external libraries) */
 function drawChart(canvas, series, opts) {
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
@@ -970,6 +989,8 @@ function drawChart(canvas, series, opts) {
   const x = i => padL + (W - padL - padR) * (n === 1 ? 0.5 : i / (n - 1));
 
   ctx.clearRect(0, 0, W, H);
+
+  /* grid lines */
   ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
   for (let g = 1; g <= 3; g++) {
     const y = padT + (H - padT - padB) * g / 4;
@@ -995,6 +1016,7 @@ function drawChart(canvas, series, opts) {
     if (min === max) { min -= 1; max += 1; }
     min -= (max - min) * 0.12; max += (max - min) * 0.12;
     const y = v => padT + (H - padT - padB) * (1 - (v - min) / (max - min));
+    /* area fill */
     if (s.fill) {
       const grad = ctx.createLinearGradient(0, padT, 0, H - padB);
       grad.addColorStop(0, s.color + '55'); grad.addColorStop(1, s.color + '00');
@@ -1007,10 +1029,22 @@ function drawChart(canvas, series, opts) {
     ctx.beginPath();
     for (let i = 0; i < n; i++) { const px = x(i), py = y(s.data[i]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
     ctx.stroke();
+    /* min / max labels */
     ctx.fillStyle = s.color; ctx.font = '10px ' + getComputedStyle(document.body).fontFamily;
     const maxI = s.data.indexOf(Math.max(...s.data)), minI = s.data.indexOf(Math.min(...s.data));
     ctx.fillText(Math.round(Math.max(...vals)), clamp(x(maxI) + 4, 0, W - 26), clamp(y(s.data[maxI]) - 4, 10, H - 4));
     ctx.fillText(Math.round(Math.min(...vals)), clamp(x(minI) + 4, 0, W - 26), clamp(y(s.data[minI]) + 12, 10, H - 4));
+  }
+  /* legend */
+  if (o.legend !== false) {
+    ctx.font = '10px ' + getComputedStyle(document.body).fontFamily;
+    let lx = padL;
+    const ly = H - 5;
+    for (const s of series) {
+      ctx.fillStyle = s.color; ctx.fillRect(lx, ly - 7, 8, 3);
+      ctx.fillText(s.label, lx + 12, ly - 3);
+      lx += 12 + ctx.measureText(s.label).width + 14;
+    }
   }
 }
 
@@ -1025,9 +1059,9 @@ function drawHourlyGraph() {
   };
   const series = [];
   const pick = arr => idxs.map(i => arr && arr[i] != null ? arr[i] : null);
-  if (s.metrics.includes('temp')) series.push({ label: 'Temp', color: colors.temp, data: pick(w.hourly.temperature_2m), fill: true });
+  if (s.metrics.includes('temp')) series.push({ label: state.settings.units.temp === 'f' ? 'Temp °F' : 'Temp °C', color: colors.temp, data: pick(w.hourly.temperature_2m), fill: true });
   if (s.metrics.includes('feels')) series.push({ label: 'Feels', color: colors.feels, data: pick(w.hourly.apparent_temperature) });
-  if (s.metrics.includes('precip')) series.push({ label: 'Precip', color: colors.precip, data: pick(w.hourly.precipitation), type: 'bar' });
+  if (s.metrics.includes('precip')) series.push({ label: 'Precip mm', color: colors.precip, data: pick(w.hourly.precipitation), type: 'bar' });
   if (s.metrics.includes('wind')) series.push({ label: 'Wind', color: colors.wind, data: pick(w.hourly.wind_speed_10m) });
   if (s.metrics.includes('uv')) series.push({ label: 'UV', color: colors.uv, data: pick(w.hourly.uv_index) });
   drawChart(canvas, series.filter(s2 => s2.data.some(v => v != null)), {});
@@ -1044,7 +1078,7 @@ function renderDaily(body) {
   const span = Math.max(1, weekMax - weekMin);
 
   let html = '<div class="daily-controls"><label style="font-size:0.85em;color:var(--text2)">Days: <select data-dailycount>' +
-    [7, 10, 14, 16].map(v => '<option value="' + v + '"' + (n === v ? ' selected' : '') + '>' + v + '</option>').join('') +
+    [7, 10, 14, 16].map(v => '<option value="' + v + '"' + (n === Math.min(v, d.daily ? 16 : 16) || n === v ? ' selected' : '') + '>' + v + '</option>').join('') +
     '</select></label></div>';
 
   html += '<div class="day-list">';
@@ -1119,11 +1153,921 @@ function drawDetailCharts() {
   const idxs = nextHours(24);
   const graphCol = getComputedStyle(document.documentElement).getPropertyValue('--graph').trim() || '#4cc2ff';
   const t = $('#detail-chart-temp'), p = $('#detail-chart-precip');
-  if (t) drawChart(t, [{ label: 'Temp', color: graphCol, data: idxs.map(i2 => w.hourly.temperature_2m[i2]), fill: true }], { legend: false });
-  if (p) drawChart(p, [{ label: 'Precip', color: '#60a5fa', data: idxs.map(i2 => w.hourly.precipitation[i2]), type: 'bar' }], { legend: false });
+  if (t) drawChart(t, [{ label: state.settings.units.temp === 'f' ? 'Temp °F' : 'Temp °C', color: graphCol, data: idxs.map(i2 => w.hourly.temperature_2m[i2]), fill: true }], { legend: false });
+  if (p) drawChart(p, [{ label: 'Precip mm', color: '#60a5fa', data: idxs.map(i2 => w.hourly.precipitation[i2]), type: 'bar' }], { legend: false });
 }
 
 /* ============================ 18. MODAL HELPERS ============================ */
-function openModal(id) { $('#' + id).classList.remove('hidden'); }
+function openModal(id) {
+  $('#' + id).classList.remove('hidden');
+  const panel = $('#' + id + ' .modal-panel');
+  if (panel) { const btn = $('.modal-head .icon-btn', panel); if (btn) btn.focus(); }
+}
 function closeModal(id) { $('#' + id).classList.add('hidden'); }
 function anyModalOpen() { return $$('.modal').some(m => !m.classList.contains('hidden')); }
+
+/* ============================ 19. SETTINGS PANEL ============================ */
+const SETTINGS_CATS = [
+  ['general', 'General', 'M3 12h18M12 3v18'],
+  ['appearance', 'Appearance', 'M12 3a9 9 0 1 0 9 9c-2-1-3-3-3-5s1-4 3-5a9 9 0 0 0-9 1z'],
+  ['dashboard', 'Dashboard', 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z'],
+  ['units', 'Units', 'M4 7h16M4 7l4 13M8 7L4 20M6.5 14h3M20 17a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM17 6v4'],
+  ['time', 'Time & Date', 'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z'],
+  ['accessibility', 'Accessibility', 'M12 4a1.6 1.6 0 1 0 0-3.2A1.6 1.6 0 0 0 12 4zM4 9l7 1 7-1M12 10v5l-3 6M12 15l3 6'],
+  ['data', 'Data', 'M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6'],
+  ['about', 'About', 'M12 8h.01M12 11v6M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z']
+];
+
+function buildSettingsNav() {
+  $('#settings-nav').innerHTML = SETTINGS_CATS.map(c =>
+    '<button data-cat="' + c[0] + '" class="' + (state.activeCat === c[0] ? 'on' : '') + '" aria-current="' + (state.activeCat === c[0]) + '">' +
+    '<svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="' + c[2] + '"/></svg>' + c[1] + '</button>').join('');
+}
+function openSettings(cat) {
+  state.activeCat = cat || state.activeCat;
+  buildSettingsNav();
+  renderSettingsContent();
+  openModal('settings-modal');
+}
+
+/* ----- customization control definitions ----- */
+const FONT_OPTIONS = [
+  ['Inter, system-ui, -apple-system, sans-serif', 'Inter (modern)'],
+  ["'Space Grotesk', system-ui, sans-serif", 'Space Grotesk'],
+  ["'JetBrains Mono', ui-monospace, monospace", 'JetBrains Mono'],
+  ["Georgia, 'Times New Roman', serif", 'Georgia (serif)'],
+  ["'Trebuchet MS', Verdana, sans-serif", 'Trebuchet'],
+  ["'Segoe UI', Tahoma, sans-serif", 'Segoe UI'],
+  ['custom', 'Custom…']
+];
+const CONTROL_GROUPS = [
+  { title: 'Colors', note: 'Card color is combined with the “Glass opacity” effect below.', controls: [
+    { p: 'appearance.colors.bg', l: 'Background', t: 'color' },
+    { p: 'appearance.colors.bg2', l: 'Secondary background', t: 'color' },
+    { p: 'appearance.colors.card', l: 'Cards', t: 'color' },
+    { p: 'appearance.colors.text', l: 'Text', t: 'color' },
+    { p: 'appearance.colors.text2', l: 'Secondary text', t: 'color' },
+    { p: 'appearance.colors.accent', l: 'Accent', t: 'color' },
+    { p: 'appearance.colors.border', l: 'Borders', t: 'color' },
+    { p: 'appearance.colors.button', l: 'Buttons', t: 'color' },
+    { p: 'appearance.colors.icon', l: 'Icons', t: 'color' },
+    { p: 'appearance.colors.graph', l: 'Graphs', t: 'color' }
+  ]},
+  { title: 'Weather-condition colors', note: 'Used to tint icons and dynamic weather backgrounds.', controls: [
+    { p: 'appearance.condColors.clear', l: 'Clear', t: 'color' },
+    { p: 'appearance.condColors.cloudy', l: 'Cloudy', t: 'color' },
+    { p: 'appearance.condColors.rain', l: 'Rain', t: 'color' },
+    { p: 'appearance.condColors.snow', l: 'Snow', t: 'color' },
+    { p: 'appearance.condColors.storm', l: 'Storm', t: 'color' },
+    { p: 'appearance.condColors.fog', l: 'Fog', t: 'color' },
+    { p: 'appearance.condColors.night', l: 'Night', t: 'color' }
+  ]},
+  { title: 'Typography', controls: [
+    { p: 'appearance.typography.fontFamily', l: 'Font family', t: 'select', options: FONT_OPTIONS },
+    { p: 'appearance.typography.fontSize', l: 'Font size (px)', t: 'range', min: 12, max: 22, step: 1 },
+    { p: 'appearance.typography.fontWeight', l: 'Font weight', t: 'range', min: 300, max: 800, step: 100 },
+    { p: 'appearance.typography.letterSpacing', l: 'Letter spacing (em)', t: 'range', min: -0.5, max: 3, step: 0.1 },
+    { p: 'appearance.typography.lineHeight', l: 'Line height', t: 'range', min: 1.1, max: 2, step: 0.05 }
+  ]},
+  { title: 'Layout', controls: [
+    { p: 'appearance.layout.cols', l: 'Grid columns', t: 'range', min: 1, max: 6, step: 1 },
+    { p: 'appearance.layout.cardRadius', l: 'Card radius (px)', t: 'range', min: 0, max: 32, step: 1 },
+    { p: 'appearance.layout.gap', l: 'Spacing / gap (px)', t: 'range', min: 4, max: 40, step: 1 },
+    { p: 'appearance.layout.padding', l: 'Card padding (px)', t: 'range', min: 8, max: 40, step: 1 },
+    { p: 'appearance.layout.iconSize', l: 'Weather icon size (px)', t: 'range', min: 16, max: 96, step: 1 },
+    { p: 'appearance.layout.tempSize', l: 'Temperature size (px)', t: 'range', min: 28, max: 120, step: 1 },
+    { p: 'appearance.layout.sectionGap', l: 'Section spacing (px)', t: 'range', min: 8, max: 64, step: 1 },
+    { p: 'appearance.layout.cardHeight', l: 'Card height (px, 0 = auto)', t: 'range', min: 0, max: 400, step: 2 },
+    { p: 'appearance.layout.cardWidth', l: 'Card width (px, 0 = auto)', t: 'range', min: 0, max: 640, step: 4 },
+    { p: 'appearance.layout.headerHeight', l: 'Header height (px)', t: 'range', min: 48, max: 96, step: 1 },
+    { p: 'appearance.layout.sidebarWidth', l: 'Settings sidebar (px)', t: 'range', min: 180, max: 360, step: 4 }
+  ]},
+  { title: 'Effects', controls: [
+    { p: 'appearance.effects.blur', l: 'Glass blur (px)', t: 'range', min: 0, max: 40, step: 1 },
+    { p: 'appearance.effects.glass', l: 'Glass opacity', t: 'range', min: 0, max: 0.6, step: 0.01 },
+    { p: 'appearance.effects.shadow', l: 'Shadow strength', t: 'range', min: 0, max: 1, step: 0.02 },
+    { p: 'appearance.effects.opacity', l: 'Widget opacity', t: 'range', min: 0.5, max: 1, step: 0.02 },
+    { p: 'appearance.effects.transition', l: 'Transition speed (s)', t: 'range', min: 0, max: 1, step: 0.05 },
+    { p: 'appearance.effects.animSpeed', l: 'Animation speed', t: 'range', min: 0, max: 2, step: 0.1 },
+    { p: 'appearance.effects.gradient', l: 'Gradient backgrounds', t: 'toggle' }
+  ]}
+];
+
+function ctlRow(c) {
+  const val = getPath(state.settings, c.p);
+  const defVal = getPath(DEFAULTS, c.p);
+  let input;
+  if (c.t === 'color') {
+    input = '<input type="color" data-ctl="' + c.p + '" value="' + (/^#([a-f\d]{6})$/i.test(val) ? val : '#888888') + '" aria-label="' + esc(c.l) + '">';
+  } else if (c.t === 'range') {
+    input = '<input type="range" data-ctl="' + c.p + '" min="' + c.min + '" max="' + c.max + '" step="' + c.step + '" value="' + val + '" aria-label="' + esc(c.l) + '">' +
+      '<span class="ctl-val">' + val + '</span>';
+  } else if (c.t === 'select') {
+    input = '<select data-ctl="' + c.p + '" aria-label="' + esc(c.l) + '">' +
+      c.options.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === val ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>';
+    if (c.p === 'appearance.typography.fontFamily' && !FONT_OPTIONS.some(o => o[0] === val)) {
+      input += '<input type="text" data-ctl-customfont value="' + esc(val) + '" placeholder="e.g. Arial, sans-serif" aria-label="Custom font family" style="margin-top:6px;max-width:210px">';
+    }
+  } else if (c.t === 'toggle') {
+    input = '<span class="switch"><input type="checkbox" data-ctl="' + c.p + '"' + (val ? ' checked' : '') + ' aria-label="' + esc(c.l) + '"><i></i></span>';
+  } else {
+    input = '<input type="text" data-ctl="' + c.p + '" value="' + esc(val) + '" aria-label="' + esc(c.l) + '">';
+  }
+  return '<div class="set-row"><label>' + esc(c.l) + '</label><div class="ctl">' + input +
+    '<button class="ctl-reset" data-reset="' + c.p + '" title="Reset “' + esc(c.l) + '” to default" aria-label="Reset ' + esc(c.l) + ' to default">⟲</button></div></div>';
+}
+
+function renderSettingsContent() {
+  const cat = state.activeCat;
+  const el = $('#settings-content');
+  const S = state.settings;
+
+  if (cat === 'general') {
+    el.innerHTML = '<h3>General</h3>' +
+      setRow('Auto-refresh interval', '<select data-set="general.refreshMinutes">' +
+        [[0, 'Disabled'], [5, 'Every 5 minutes'], [10, 'Every 10 minutes'], [15, 'Every 15 minutes'], [30, 'Every 30 minutes'], [60, 'Every hour']]
+          .map(o => '<option value="' + o[0] + '"' + (S.general.refreshMinutes === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>') +
+      setRow('Ask for my location on start-up', switchHtml('general.startGeolocate', S.general.startGeolocate)) +
+      '<p class="group-note">You can always set your location manually from the search box — geolocation is optional.</p>';
+  }
+
+  else if (cat === 'appearance') {
+    const bg = S.appearance.background;
+    el.innerHTML = '<h3>Theme</h3>' +
+      '<div class="set-row"><label>Active theme</label><div class="ctl">' +
+        '<select data-set="appearance.theme">' +
+          BUILTIN_THEMES.map(t => '<option value="' + t.id + '"' + (S.appearance.theme === t.id ? ' selected' : '') + '>' + esc(t.name) + ' (built-in)</option>').join('') +
+          state.customThemes.map(t => '<option value="' + t.id + '"' + (S.appearance.theme === t.id ? ' selected' : '') + '>' + esc(t.name) + ' (custom)</option>').join('') +
+        '</select><button class="btn small ghost" id="open-themes-btn">Manage themes…</button></div></div>' +
+      '<h3>Background</h3>' +
+      setRow('Background type', '<select data-set="appearance.background.type">' +
+        [['dynamic', 'Weather-based (dynamic)'], ['solid', 'Solid color'], ['gradient', 'Gradient'], ['image', 'Image (URL)'], ['animated', 'Animated (weather particles)']]
+          .map(o => '<option value="' + o[0] + '"' + (bg.type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>') +
+      setRow('Dynamic weather background', switchHtml('appearance.background.dynamicOn', bg.dynamicOn !== false)) +
+      setRow('Solid color', '<input type="color" data-set="appearance.background.color" value="' + bg.color + '">') +
+      setRow('Gradient colors', '<input type="color" data-set="appearance.background.color" value="' + bg.color + '" aria-label="Gradient color 1"> <input type="color" data-set="appearance.background.color2" value="' + bg.color2 + '" aria-label="Gradient color 2">') +
+      setRow('Image URL', '<input type="text" data-set="appearance.background.image" value="' + esc(bg.image) + '" placeholder="https://…" style="width:260px;max-width:60vw">') +
+      CONTROL_GROUPS.map(g => '<h3>' + g.title + '</h3>' + (g.note ? '<p class="group-note">' + g.note + '</p>' : '') + g.controls.map(ctlRow).join('')).join('') +
+      '<div class="settings-actions">' +
+        '<button class="btn ghost" id="reset-theme-btn">Reset theme</button>' +
+        '<button class="btn ghost" id="reset-appearance-btn">Reset appearance</button>' +
+        '<button class="btn" id="export-settings-btn">Export settings</button>' +
+        '<button class="btn ghost" id="import-settings-btn">Import settings</button>' +
+        '<input type="file" id="import-settings-file" accept="application/json,.json" class="hidden" aria-label="Import settings file">' +
+      '</div>';
+  }
+
+  else if (cat === 'dashboard') {
+    el.innerHTML = '<h3>Dashboard widgets</h3>' +
+      '<p class="group-note">Toggle visibility, change size and display mode, and reorder with drag & drop or the arrow buttons. Changes save automatically.</p>' +
+      state.settings.dashboard.map((c, i) => {
+        const w = WIDGETS.find(x => x.id === c.id);
+        return '<div class="dash-row" draggable="true" data-dash="' + c.id + '">' +
+          '<button class="dash-grip" data-dashmove title="Drag to reorder" aria-label="Drag ' + esc(w.name) + '">⋮⋮</button>' +
+          '<span class="dash-name">' + esc(w.name) + '</span>' +
+          '<label style="display:flex;align-items:center;gap:5px;font-size:0.8em;color:var(--text2)">Show <span class="switch"><input type="checkbox" data-dashvis="' + c.id + '"' + (c.visible ? ' checked' : '') + ' aria-label="Show ' + esc(w.name) + '"><i></i></span></label>' +
+          '<select data-dashsize="' + c.id + '" aria-label="Size of ' + esc(w.name) + '">' +
+            [['sm', 'Small'], ['md', 'Medium'], ['lg', 'Full width']].map(o => '<option value="' + o[0] + '"' + (c.size === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+          '<select data-dashmode="' + c.id + '" aria-label="Mode of ' + esc(w.name) + '">' +
+            [['normal', 'Normal'], ['compact', 'Compact'], ['detailed', 'Detailed']].map(o => '<option value="' + o[0] + '"' + (c.mode === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+          '<button class="icon-btn" data-dashup="' + i + '" aria-label="Move ' + esc(w.name) + ' up">▲</button>' +
+          '<button class="icon-btn" data-dashdown="' + i + '" aria-label="Move ' + esc(w.name) + ' down">▼</button>' +
+        '</div>';
+      }).join('');
+  }
+
+  else if (cat === 'units') {
+    el.innerHTML = '<h3>Units — each setting is independent</h3>' +
+      setRow('Temperature', unitSelect('units.temp', [['c', 'Celsius (°C)'], ['f', 'Fahrenheit (°F)']])) +
+      setRow('Wind speed', unitSelect('units.wind', [['kmh', 'km/h'], ['mph', 'mph'], ['ms', 'm/s'], ['kn', 'knots']])) +
+      setRow('Pressure', unitSelect('units.pressure', [['hpa', 'hPa'], ['inhg', 'inHg'], ['mmhg', 'mmHg']])) +
+      setRow('Precipitation', unitSelect('units.precip', [['mm', 'millimeters'], ['in', 'inches']])) +
+      setRow('Visibility', unitSelect('units.vis', [['km', 'kilometers'], ['mi', 'miles']])) +
+      '<p class="group-note">Changing one unit never affects the others.</p>';
+  }
+
+  else if (cat === 'time') {
+    el.innerHTML = '<h3>Time & date</h3>' +
+      setRow('Clock format', '<select data-set="time.hour12">' +
+        [['true', '12-hour (AM/PM)'], ['false', '24-hour']].map(o => '<option value="' + o[0] + '"' + (String(S.time.hour12) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>') +
+      setRow('Time zone', '<select data-set="time.tz">' +
+        [['auto', "Weather location's time zone"], ['device', 'This device']].map(o => '<option value="' + o[0] + '"' + (S.time.tz === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>') +
+      setRow('Date format', '<select data-set="time.dateFormat">' +
+        [['mdy', 'MM/DD/YYYY'], ['dmy', 'DD/MM/YYYY'], ['ymd', 'YYYY-MM-DD'], ['long', 'Weekday, Month D'], ['short', 'Short with weekday']]
+          .map(o => '<option value="' + o[0] + '"' + (S.time.dateFormat === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>') +
+      setRow('Hours shown in hourly forecast', '<select data-set="hourly.count">' +
+        [[12, '12 hours'], [24, '24 hours'], [48, '48 hours'], ['all', 'Full forecast']]
+          .map(o => '<option value="' + o[0] + '"' + (String(S.hourly.count) === String(o[0]) ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>') +
+      setRow('Days shown in daily forecast', '<select data-set="dailyCount">' +
+        [7, 10, 14, 16].map(v => '<option value="' + v + '"' + (S.dailyCount === v ? ' selected' : '') + '>' + v + ' days</option>').join('') + '</select>');
+  }
+
+  else if (cat === 'accessibility') {
+    el.innerHTML = '<h3>Accessibility</h3>' +
+      setRow('Reduce motion & animated effects', switchHtml('accessibility.reducedMotion', S.accessibility.reducedMotion)) +
+      setRow('Large text', switchHtml('accessibility.largeText', S.accessibility.largeText)) +
+      setRow('Boost contrast', switchHtml('accessibility.highContrast', S.accessibility.highContrast)) +
+      '<p class="group-note">All controls are keyboard reachable, show visible focus rings, and include ARIA labels. Weather is never communicated by color alone — text labels accompany every icon.</p>';
+  }
+
+  else if (cat === 'data') {
+    el.innerHTML = '<h3>Data management</h3>' +
+      '<div class="settings-actions" style="margin-top:0;border-top:0;padding-top:0">' +
+        '<button class="btn" id="export-settings-btn2">Export all settings</button>' +
+        '<button class="btn ghost" id="import-settings-btn2">Import settings</button>' +
+        '<input type="file" id="import-settings-file2" accept="application/json,.json" class="hidden" aria-label="Import settings file">' +
+        '<button class="btn ghost" id="clear-cache-btn">Clear weather cache</button>' +
+        '<button class="btn danger" id="wipe-btn">Erase all app data</button>' +
+      '</div>' +
+      '<h3>API</h3>' +
+      '<p class="group-note">Forecast, geocoding and air-quality data come from the free ' +
+      '<a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo API</a> (no key required, CC BY 4.0). ' +
+      'Reverse geocoding for “my location” uses the free BigDataCloud client API. Requests are debounced, cached and never duplicated. ' +
+      'Your settings, themes, locations and dashboard live only in this browser (localStorage) — nothing is uploaded anywhere.</p>';
+  }
+
+  else if (cat === 'about') {
+    el.innerHTML = '<h3>About Nexora Weather</h3>' +
+      '<p>Version ' + APP_VERSION + '</p><br>' +
+      '<p>Nexora Weather is a fully client-side weather application with deep customization: themes, colors, typography, layout, effects, backgrounds, units, widgets and more — all stored locally.</p><br>' +
+      '<h3>Attribution</h3>' +
+      '<p>Weather data © <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a>, licensed under ' +
+      '<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>. ' +
+      'Location search by the Open-Meteo Geocoding API. Air quality by the Open-Meteo Air Quality API. ' +
+      'Place names for browser geolocation by BigDataCloud. Fonts by Google Fonts.</p>';
+  }
+}
+function setRow(label, inputHtml) {
+  return '<div class="set-row"><label>' + esc(label) + '</label><div class="ctl">' + inputHtml + '</div></div>';
+}
+function switchHtml(path, on) {
+  return '<span class="switch"><input type="checkbox" data-set="' + path + '"' + (on ? ' checked' : '') + ' aria-label="' + esc(path) + '"><i></i></span>';
+}
+function unitSelect(path, options) {
+  const cur = getPath(state.settings, path);
+  return '<select data-set="' + path + '" aria-label="' + esc(path) + '">' +
+    options.map(o => '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>';
+}
+
+/* live-applied settings change (data-set controls) */
+function handleSetChange(el) {
+  const path = el.dataset.set;
+  if (!path) return;
+  let v = el.type === 'checkbox' ? el.checked : el.value;
+  if (el.tagName === 'SELECT' && el.dataset.num !== undefined) v = Number(v);
+  if (el.type === 'checkbox') { setPath(state.settings, path, v); }
+  else if (path === 'general.refreshMinutes' || path === 'dailyCount' || path === 'hourly.count' || path === 'appearance.layout.cols') setPath(state.settings, path, isNaN(Number(v)) ? v : Number(v));
+  else if (path === 'time.hour12') setPath(state.settings, path, v === 'true');
+  else setPath(state.settings, path, v);
+
+  saveSettings();
+  if (path === 'appearance.theme') { applyTheme(v, { silent: true }); renderSettingsContent(); renderAllBodies(); return; }
+  if (path.startsWith('appearance.')) applyAppearance();
+  if (path.startsWith('units.') || path.startsWith('time.')) renderAllBodies();
+  if (path === 'hourly.count' || path === 'dailyCount') renderAllBodies();
+  if (path === 'general.refreshMinutes') startRefreshLoop();
+  if (path.startsWith('accessibility.')) { applyAppearance(); renderAllBodies(); }
+  if (path === 'appearance.background.type' || path.startsWith('appearance.background')) applyAppearance();
+}
+
+/* customization panel controls (data-ctl) */
+function handleCtlInput(el) {
+  const path = el.dataset.ctl;
+  if (!path) return;
+  let v = el.type === 'checkbox' ? el.checked : el.value;
+  if (el.type === 'range') v = Number(v);
+  setPath(state.settings, path, v);
+  saveSettings();
+  if (el.type === 'range') { const sv = el.parentElement.querySelector('.ctl-val'); if (sv) sv.textContent = v; }
+  applyAppearance();
+  renderAllBodies();
+}
+
+/* ============================ 20. THEMES MANAGER ============================ */
+function themeSwatchStyle(t) {
+  const o = t.overrides || {};
+  const c = deepMerge(deepMerge(clone(DEFAULT_COLORS), (BUILTIN_THEMES[0].overrides || {})), o.colors || {});
+  return 'background:linear-gradient(135deg,' + c.bg + ' 55%,' + c.bg2 + ' 55%);';
+}
+function buildThemesModal() {
+  const all = BUILTIN_THEMES.map(t => Object.assign({ builtin: true }, t))
+    .concat(state.customThemes.map(t => Object.assign({ builtin: false }, t)));
+  $('#themes-body').innerHTML =
+    '<div class="theme-grid">' + all.map(t =>
+      '<div class="theme-card' + (state.settings.appearance.theme === t.id ? ' on' : '') + '" data-themeapply="' + t.id + '" role="button" tabindex="0" aria-label="Apply theme ' + esc(t.name) + '">' +
+        '<div class="theme-swatch" style="' + themeSwatchStyle(t) + '"></div>' +
+        '<div class="theme-info"><b>' + esc(t.name) + '</b><span class="theme-tag">' + (t.builtin ? 'built-in' : 'custom') + '</span></div>' +
+        (t.builtin ? '' :
+          '<div class="theme-actions" style="padding:0 10px 10px">' +
+            '<button class="btn small ghost" data-themerename="' + t.id + '">Rename</button>' +
+            '<button class="btn small ghost" data-themedupe="' + t.id + '">Duplicate</button>' +
+            '<button class="btn small ghost" data-themeexport="' + t.id + '">Export</button>' +
+            '<button class="btn small danger" data-themedelete="' + t.id + '">Delete</button>' +
+          '</div>') +
+      '</div>').join('') + '</div>' +
+    '<div class="save-theme-row">' +
+      '<input type="text" id="new-theme-name" placeholder="Name for a theme based on current appearance…" aria-label="New theme name">' +
+      '<button class="btn" id="save-theme-btn">Save current as theme</button>' +
+      '<button class="btn ghost" id="import-theme-btn">Import theme</button>' +
+      '<input type="file" id="import-theme-file" accept="application/json,.json" class="hidden" aria-label="Import theme file">' +
+    '</div>' +
+    '<p class="group-note">Tip: customize anything in Settings → Appearance, then save the result as your own theme here.</p>';
+}
+function openThemes() { buildThemesModal(); openModal('themes-modal'); }
+function saveCurrentAsTheme(name) {
+  const ap = state.settings.appearance;
+  const overrides = {
+    colors: clone(ap.colors), condColors: clone(ap.condColors),
+    typography: clone(ap.typography), layout: clone(ap.layout),
+    effects: clone(ap.effects), background: clone(ap.background)
+  };
+  const t = { id: 'theme-' + Date.now(), name, custom: true, overrides };
+  state.customThemes.push(t);
+  saveThemes();
+  state.settings.appearance.theme = t.id; saveSettings();
+  buildThemesModal(); renderSettingsContent();
+  toast('Theme “' + name + '” saved.', 'ok');
+}
+function exportTheme(id) {
+  const t = findTheme(id);
+  if (!t) return;
+  downloadJSON({ app: 'nexora-weather', kind: 'theme', theme: t }, 'nexora-theme-' + t.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.json');
+}
+function importThemeFile(file) {
+  readJSONFile(file, j => {
+    const t = j && (j.theme || j);
+    if (!t || typeof t !== 'object' || !t.name || typeof t.overrides !== 'object') {
+      toast('That file is not a valid Nexora theme.', 'error'); return;
+    }
+    const nt = { id: 'theme-' + Date.now(), name: String(t.name).slice(0, 40), custom: true, overrides: t.overrides };
+    state.customThemes.push(nt); saveThemes();
+    buildThemesModal();
+    toast('Theme “' + nt.name + '” imported.', 'ok');
+  });
+}
+
+/* ============================ 21. SAVED LOCATIONS ============================ */
+function buildLocPopover() {
+  const list = $('#loc-list');
+  const gpsActive = state.activeLoc === 'gps';
+  let html = '<li class="loc-item' + (gpsActive ? ' active' : '') + '" draggable="false">' +
+    '<button class="loc-info" data-locswitch="gps"><span class="loc-name">📍 Current location (GPS)</span>' +
+    '<span class="loc-meta">' + (state.gps ? esc(state.gps.label || '') + ' · ' + state.gps.lat.toFixed(2) + ', ' + state.gps.lon.toFixed(2) : 'Not set — click to enable') + '</span></button></li>';
+  html += state.locations.map((l, i) =>
+    '<li class="loc-item' + (state.activeLoc === l.id ? ' active' : '') + '" draggable="true" data-locid="' + l.id + '">' +
+      '<button class="loc-info" data-locswitch="' + l.id + '">' +
+        '<span class="loc-name" data-locname="' + l.id + '">' + flagEmoji(l.cc) + ' ' + esc(l.name) + '</span>' +
+        '<span class="loc-meta">' + esc([l.region, l.country].filter(Boolean).join(', ')) + ' · ' + l.lat.toFixed(2) + ', ' + l.lon.toFixed(2) + '</span>' +
+      '</button>' +
+      '<button class="icon-btn" data-locup="' + i + '" aria-label="Move ' + esc(l.name) + ' up">▲</button>' +
+      '<button class="icon-btn" data-locdown="' + i + '" aria-label="Move ' + esc(l.name) + ' down">▼</button>' +
+      '<button class="icon-btn" data-locrename="' + l.id + '" aria-label="Rename ' + esc(l.name) + '">✎</button>' +
+      '<button class="icon-btn" data-locdel="' + l.id + '" aria-label="Delete ' + esc(l.name) + '">🗑</button>' +
+    '</li>').join('');
+  list.innerHTML = html;
+}
+function toggleLocPopover() {
+  const p = $('#loc-popover');
+  const willOpen = p.classList.contains('hidden');
+  p.classList.toggle('hidden');
+  $('#btn-locations').setAttribute('aria-expanded', String(willOpen));
+  if (willOpen) buildLocPopover();
+}
+function addLocation(r) {
+  const loc = locFromGeocodeResult(r);
+  const existing = state.locations.find(l => l.id === loc.id);
+  if (!existing) { state.locations.push(loc); }
+  state.activeLoc = loc.id;
+  saveLocations();
+  loadWeather('location');
+  toast('Now showing ' + loc.name + (loc.country ? ', ' + loc.country : ''), 'ok');
+}
+function moveLocation(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= state.locations.length) return;
+  const arr = state.locations;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  saveLocations(); buildLocPopover();
+}
+
+/* ============================ 22. SEARCH ============================ */
+function renderSearchResults(results, status) {
+  const box = $('#search-results');
+  state.searchActive = -1;
+  if (status) { box.innerHTML = '<div class="search-status">' + esc(status) + '</div>'; return; }
+  if (!results.length) { box.innerHTML = '<div class="search-status">No matching places found. Try a nearby city or the postal code of a larger city.</div>'; return; }
+  box.innerHTML = results.map((r, i) =>
+    '<button class="search-result" role="option" data-result="' + i + '" aria-selected="false">' +
+      '<span class="flag">' + flagEmoji(r.country_code) + '</span>' +
+      '<span><span class="sr-name">' + esc(r.name) + '</span><br>' +
+      '<span class="sr-meta">' + esc([r.admin1, r.country].filter(Boolean).join(', ')) + '</span></span>' +
+    '</button>').join('');
+  box.dataset.results = JSON.stringify(results.map(r => ({ id: r.id, name: r.name, admin1: r.admin1, country: r.country, country_code: r.country_code, latitude: r.latitude, longitude: r.longitude, timezone: r.timezone })));
+}
+const runSearch = debounce(async q => {
+  const box = $('#search-results');
+  if (!q || q.trim().length < 2) { box.classList.add('hidden'); return; }
+  renderSearchResults([], 'Searching…');
+  box.classList.remove('hidden');
+  try {
+    const results = await geocode(q.trim());
+    renderSearchResults(results, results.length ? '' : 'No matches. Postal-code search works best with larger cities.');
+  } catch (e) {
+    renderSearchResults([], 'Search failed — check your network connection.');
+  }
+}, 350);
+function pickResult(i) {
+  const box = $('#search-results');
+  let r;
+  try { r = JSON.parse(box.dataset.results || '[]')[i]; } catch (e) { return; }
+  if (!r) return;
+  box.classList.add('hidden');
+  $('#search-input').value = '';
+  $('#search-clear').classList.add('hidden');
+  addLocation(r);
+}
+
+/* ============================ 23. GEOLOCATION ============================ */
+function useMyLocation() {
+  if (!navigator.geolocation) {
+    toast('Geolocation is not supported by this browser — search for a place instead.', 'error');
+    return;
+  }
+  toast('Locating you…');
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const lat = pos.coords.latitude, lon = pos.coords.longitude;
+    const label = await reverseGeocode(lat, lon);
+    state.gps = { lat, lon, label };
+    state.activeLoc = 'gps';
+    saveLocations();
+    $('#loc-popover').classList.add('hidden');
+    loadWeather('gps');
+    toast('Location set: ' + label, 'ok');
+  }, err => {
+    toast('Could not get your location (' + (err.code === 1 ? 'permission denied' : 'unavailable') + '). You can search for a place manually.', 'error');
+    if (!state.weather) loadWeather('fallback');   /* never leave the app blank */
+  }, { timeout: 10000, maximumAge: 300000 });
+}
+
+/* ============================ 24. LOAD WEATHER ============================ */
+async function loadWeather(reason) {
+  if (state.loading) return;               /* prevent duplicate simultaneous requests */
+  state.loading = true;
+  $('#btn-refresh').classList.add('spinning');
+  const loc = currentLocation();
+  try {
+    const aqiP = fetchAQI(loc).catch(() => null);
+    const w = await fetchForecast(loc);
+    if (!validForecast(w)) throw new Error('Malformed response');
+    state.weather = w;
+    state.aqi = await aqiP;
+    state.source = 'live';
+    state.lastLoad = Date.now();
+    cacheSet(loc, { w: state.weather, a: state.aqi });
+    hideOffline();
+  } catch (err) {
+    const cached = cacheGet(loc);
+    if (cached && cached.w) {
+      state.weather = cached.w; state.aqi = cached.a;
+      state.source = 'cached'; state.lastLoad = cached.time;
+      showOffline('Network problem — showing the last data retrieved for this location.', cached.time);
+    } else {
+      state.weather = null;
+      showOffline('Could not load weather (' + (err.name === 'AbortError' ? 'request timed out' : 'network error') + '). Check your connection and retry.', 0);
+    }
+  } finally {
+    state.loading = false;
+    $('#btn-refresh').classList.remove('spinning');
+    renderAllBodies();
+    applyBackground();
+  }
+}
+function showOffline(msg, cachedTime) {
+  $('#offline-banner').classList.remove('hidden');
+  $('#offline-msg').textContent = msg;
+  $('#offline-meta').textContent = cachedTime ? 'Last updated ' + fmtTime(Math.floor(cachedTime / 1000)) + ' · ' + fmtDate(Math.floor(cachedTime / 1000)) : '';
+}
+function hideOffline() { $('#offline-banner').classList.add('hidden'); }
+
+/* auto refresh loop */
+let refreshTimer = 0;
+function startRefreshLoop() {
+  clearInterval(refreshTimer);
+  const mins = state.settings.general.refreshMinutes;
+  if (!mins || mins <= 0) return;
+  refreshTimer = setInterval(() => {
+    if (document.hidden || state.loading) return;
+    if (Date.now() - state.lastLoad >= mins * 60000) loadWeather('auto');
+  }, 20000);
+}
+
+/* ============================ 25. CLOCK ============================ */
+function updateClock() {
+  const el = $('#clock');
+  if (!el) return;
+  const now = Math.floor(Date.now() / 1000);
+  el.textContent = fmtTime(now) + (state.weather && state.weather.timezone && state.settings.time.tz !== 'device' ? ' · ' + state.weather.timezone.split('/').pop().replace(/_/g, ' ') : '');
+}
+
+/* ============================ 26. EXPORT / IMPORT ============================ */
+function downloadJSON(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function readJSONFile(file, cb) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    try { cb(JSON.parse(fr.result)); }
+    catch (e) { toast('That file is not valid JSON.', 'error'); }
+  };
+  fr.onerror = () => toast('Could not read that file.', 'error');
+  fr.readAsText(file);
+}
+function exportAll() {
+  downloadJSON({
+    app: 'nexora-weather', kind: 'settings', version: APP_VERSION, exportedAt: new Date().toISOString(),
+    settings: state.settings, themes: state.customThemes, locations: state.locations
+  }, 'nexora-weather-settings.json');
+  toast('Settings exported.', 'ok');
+}
+function importAll(file) {
+  readJSONFile(file, j => {
+    try {
+      if (!j || typeof j !== 'object') throw new Error('bad');
+      const src = j.settings && typeof j.settings === 'object' ? j.settings : j;
+      /* validate & sanitize: only known top-level keys are merged */
+      const allowed = ['general', 'units', 'time', 'accessibility', 'hourly', 'dailyCount', 'appearance'];
+      const clean = {};
+      for (const k of allowed) if (src[k] && typeof src[k] === 'object') clean[k] = src[k];
+      if (src.dailyCount != null) clean.dailyCount = src.dailyCount;
+      if (!Object.keys(clean).length) throw new Error('bad');
+      deepMerge(state.settings, clean);
+      if (Array.isArray(src.dashboard)) state.settings.dashboard = src.dashboard;
+      if (Array.isArray(j.themes)) state.customThemes = j.themes.filter(t => t && t.name && t.overrides);
+      if (Array.isArray(j.locations)) { state.locations = j.locations.filter(l => l && l.id && isFinite(l.lat) && isFinite(l.lon)); }
+      saveSettings(); saveThemes(); saveLocations();
+      applyAppearance(); buildDashboard(); renderAllBodies();
+      if (state.activeCat) renderSettingsContent();
+      toast('Settings imported successfully.', 'ok');
+    } catch (e) {
+      toast('Import failed: the file does not look like a valid Nexora settings export.', 'error');
+    }
+  });
+}
+
+/* ============================ 27. EVENT BINDING ============================ */
+function bindEvents() {
+  /* --- header buttons --- */
+  $('#btn-settings').addEventListener('click', () => { openSettings(); $('#btn-settings').setAttribute('aria-expanded', 'true'); });
+  $('#btn-themes').addEventListener('click', openThemes);
+  $('#btn-refresh').addEventListener('click', () => loadWeather('manual'));
+  $('#btn-locate').addEventListener('click', useMyLocation);
+  $('#btn-locations').addEventListener('click', toggleLocPopover);
+  $('#retry-btn').addEventListener('click', () => loadWeather('retry'));
+  $('#brand').addEventListener('click', e => { e.preventDefault(); window.scrollTo({ top: 0, behavior: state.settings.accessibility.reducedMotion ? 'auto' : 'smooth' }); });
+
+  /* --- search --- */
+  const si = $('#search-input'), sr = $('#search-results');
+  si.addEventListener('input', () => {
+    $('#search-clear').classList.toggle('hidden', !si.value);
+    runSearch(si.value);
+  });
+  si.addEventListener('keydown', e => {
+    const items = $$('.search-result', sr);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!items.length) return;
+      state.searchActive = (state.searchActive + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items.forEach((it, i) => it.classList.toggle('active', i === state.searchActive));
+      items[state.searchActive].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      if (state.searchActive >= 0) pickResult(state.searchActive);
+      else if (items.length) pickResult(0);
+    } else if (e.key === 'Escape') { sr.classList.add('hidden'); }
+  });
+  sr.addEventListener('click', e => {
+    const b = e.target.closest('[data-result]');
+    if (b) pickResult(Number(b.dataset.result));
+  });
+  $('#search-clear').addEventListener('click', () => { si.value = ''; sr.classList.add('hidden'); $('#search-clear').classList.add('hidden'); si.focus(); });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.searchbox')) sr.classList.add('hidden');
+    if (!e.target.closest('#loc-popover') && !e.target.closest('#btn-locations')) $('#loc-popover').classList.add('hidden');
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA' && !anyModalOpen()) {
+      e.preventDefault(); si.focus();
+    }
+    if (e.key === 'Escape') {
+      $$('.modal').forEach(m => m.classList.add('hidden'));
+      $('#loc-popover').classList.add('hidden');
+      sr.classList.add('hidden');
+      $('#btn-settings').setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  /* --- global delegated clicks --- */
+  document.addEventListener('click', e => {
+    const t = e.target;
+
+    const closeM = t.closest('[data-close-modal]');
+    if (closeM) { closeM.closest('.modal').classList.add('hidden'); $('#btn-settings').setAttribute('aria-expanded', 'false'); }
+    if (t.closest('[data-close-popover]')) $('#loc-popover').classList.add('hidden');
+
+    /* settings nav */
+    const nav = t.closest('[data-cat]');
+    if (nav && nav.closest('#settings-nav')) { state.activeCat = nav.dataset.cat; buildSettingsNav(); renderSettingsContent(); return; }
+
+    /* appearance buttons */
+    if (t.closest('#open-themes-btn')) { openThemes(); return; }
+    if (t.closest('#reset-theme-btn')) { applyTheme('default'); renderSettingsContent(); renderAllBodies(); toast('Theme reset to Default.', 'ok'); return; }
+    if (t.closest('#reset-appearance-btn')) {
+      state.settings.appearance = clone(DEFAULTS.appearance);
+      saveSettings(); applyAppearance(); renderSettingsContent(); renderAllBodies();
+      toast('All appearance settings reset to defaults.', 'ok'); return;
+    }
+    if (t.closest('#export-settings-btn') || t.closest('#export-settings-btn2')) { exportAll(); return; }
+    if (t.closest('#import-settings-btn')) { $('#import-settings-file').click(); return; }
+    if (t.closest('#import-settings-btn2')) { $('#import-settings-file2').click(); return; }
+    if (t.closest('#clear-cache-btn')) { store.del('cache'); Object.keys(localStorage).filter(k => k.startsWith('nexora.cache')).forEach(k => localStorage.removeItem(k)); toast('Weather cache cleared.', 'ok'); return; }
+    if (t.closest('#wipe-btn')) {
+      if (confirm('Erase ALL Nexora data (settings, themes, locations, cache) and reload?')) {
+        Object.keys(localStorage).filter(k => k.startsWith('nexora.')).forEach(k => localStorage.removeItem(k));
+        location.reload();
+      }
+      return;
+    }
+
+    /* per-control reset */
+    const rst = t.closest('[data-reset]');
+    if (rst) {
+      const p = rst.dataset.reset;
+      setPath(state.settings, p, clone(getPath(DEFAULTS, p)));
+      saveSettings(); applyAppearance(); renderSettingsContent(); renderAllBodies();
+      return;
+    }
+
+    /* dashboard: hourly controls */
+    const hc = t.closest('[data-hcount]');
+    if (hc) { state.settings.hourly.count = isNaN(Number(hc.dataset.hcount)) ? 'all' : Number(hc.dataset.hcount); saveSettings(); renderAllBodies(); return; }
+    if (t.closest('#open-detail')) { openDetail(); return; }
+
+    /* daily expand */
+    const drow = t.closest('.day-row');
+    if (drow) {
+      const card = drow.closest('.day-card');
+      const open = card.classList.toggle('open');
+      drow.setAttribute('aria-expanded', String(open));
+      return;
+    }
+
+    /* themes modal */
+    const ta = t.closest('[data-themeapply]');
+    if (ta && !t.closest('.theme-actions')) { applyTheme(ta.dataset.themeapply); buildThemesModal(); renderSettingsContent(); renderAllBodies(); return; }
+    if (t.closest('#save-theme-btn')) {
+      const name = ($('#new-theme-name').value || '').trim() || 'My theme';
+      saveCurrentAsTheme(name); return;
+    }
+    if (t.closest('#import-theme-btn')) { $('#import-theme-file').click(); return; }
+    const tRename = t.closest('[data-themerename]');
+    if (tRename) {
+      const th = state.customThemes.find(x => x.id === tRename.dataset.themerename);
+      const name = prompt('Rename theme:', th.name);
+      if (name && name.trim()) { th.name = name.trim().slice(0, 40); saveThemes(); buildThemesModal(); renderSettingsContent(); }
+      return;
+    }
+    const tDupe = t.closest('[data-themedupe]');
+    if (tDupe) {
+      const th = findTheme(tDupe.dataset.themedupe);
+      state.customThemes.push({ id: 'theme-' + Date.now(), name: th.name + ' copy', custom: true, overrides: clone(th.overrides || {}) });
+      saveThemes(); buildThemesModal(); toast('Theme duplicated.', 'ok'); return;
+    }
+    const tExp = t.closest('[data-themeexport]');
+    if (tExp) { exportTheme(tExp.dataset.themeexport); return; }
+    const tDel = t.closest('[data-themedelete]');
+    if (tDel) {
+      const id = tDel.dataset.themedelete;
+      state.customThemes = state.customThemes.filter(x => x.id !== id);
+      if (state.settings.appearance.theme === id) applyTheme('default', { silent: true });
+      saveThemes(); buildThemesModal(); renderSettingsContent();
+      toast('Theme deleted.', 'ok'); return;
+    }
+
+    /* locations popover */
+    const lsw = t.closest('[data-locswitch]');
+    if (lsw) {
+      const id = lsw.dataset.locswitch;
+      if (id === 'gps' && !state.gps) { useMyLocation(); return; }
+      state.activeLoc = id; saveLocations();
+      $('#loc-popover').classList.add('hidden');
+      loadWeather('switch');
+      return;
+    }
+    const lup = t.closest('[data-locup]'); if (lup) { moveLocation(Number(lup.dataset.locup), -1); return; }
+    const ldn = t.closest('[data-locdown]'); if (ldn) { moveLocation(Number(ldn.dataset.locdown), 1); return; }
+    const lren = t.closest('[data-locrename]');
+    if (lren) {
+      const id = lren.dataset.locrename;
+      const loc = state.locations.find(x => x.id === id);
+      const nameEl = $('[data-locname="' + id + '"]');
+      const input = document.createElement('input');
+      input.value = loc.name; input.setAttribute('aria-label', 'Rename location');
+      nameEl.textContent = ''; nameEl.appendChild(input);
+      input.focus(); input.select();
+      const commit = () => {
+        if (!input.isConnected) return;
+        const v = input.value.trim();
+        if (v) { loc.name = v.slice(0, 40); saveLocations(); }
+        buildLocPopover(); renderAllBodies();
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', ev => { if (ev.key === 'Enter') input.blur(); if (ev.key === 'Escape') buildLocPopover(); });
+      return;
+    }
+    const ldel = t.closest('[data-locdel]');
+    if (ldel) {
+      const id = ldel.dataset.locdel;
+      state.locations = state.locations.filter(x => x.id !== id);
+      if (state.activeLoc === id) state.activeLoc = state.locations[0] ? state.locations[0].id : null;
+      saveLocations(); buildLocPopover(); renderAllBodies();
+      return;
+    }
+    if (t.closest('#loc-use-gps')) { useMyLocation(); return; }
+
+    /* dashboard settings rows */
+    const dup = t.closest('[data-dashup]');
+    if (dup) { moveDash(Number(dup.dataset.dashup), -1); return; }
+    const ddn = t.closest('[data-dashdown]');
+    if (ddn) { moveDash(Number(ddn.dataset.dashdown), 1); return; }
+  });
+
+  /* keyboard activation for detail + theme cards */
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'open-detail') openDetail();
+    const tc = e.target.closest && e.target.closest('[data-themeapply]');
+    if (tc) { applyTheme(tc.dataset.themeapply); buildThemesModal(); renderSettingsContent(); renderAllBodies(); }
+  });
+
+  /* delegated changes (selects, checkboxes, range inputs, text inputs) */
+  document.addEventListener('change', e => {
+    const el = e.target;
+    if (el.dataset.set) { handleSetChange(el); return; }
+    if (el.dataset.ctl) { handleCtlInput(el); return; }
+    if (el.dataset.hgraph !== undefined) {
+      state.settings.hourly.graph = el.checked; saveSettings(); renderAllBodies(); return;
+    }
+    if (el.dataset.hmetric) {
+      const ms = state.settings.hourly.metrics;
+      const i = ms.indexOf(el.dataset.hmetric);
+      if (el.checked && i < 0) ms.push(el.dataset.hmetric);
+      if (!el.checked && i >= 0) ms.splice(i, 1);
+      saveSettings(); renderAllBodies(); return;
+    }
+    if (el.dataset.dailycount !== undefined) {
+      state.settings.dailyCount = Number(el.value); saveSettings(); renderAllBodies(); return;
+    }
+    if (el.dataset.dashvis) {
+      widgetConf(el.dataset.dashvis).visible = el.checked;
+      saveDashboard(); buildDashboard(); renderAllBodies(); return;
+    }
+    if (el.dataset.dashsize) {
+      widgetConf(el.dataset.dashsize).size = el.value;
+      saveDashboard(); buildDashboard(); renderAllBodies(); return;
+    }
+    if (el.dataset.dashmode) {
+      widgetConf(el.dataset.dashmode).mode = el.value;
+      saveDashboard(); buildDashboard(); renderAllBodies(); return;
+    }
+    if (el.id === 'import-settings-file' || el.id === 'import-settings-file2') {
+      if (el.files && el.files[0]) importAll(el.files[0]);
+      el.value = ''; return;
+    }
+    if (el.id === 'import-theme-file') {
+      if (el.files && el.files[0]) importThemeFile(el.files[0]);
+      el.value = ''; return;
+    }
+  });
+  document.addEventListener('input', e => {
+    if (e.target.dataset.ctl && e.target.type === 'range') handleCtlInput(e.target);
+    if (e.target.dataset.ctlCustomfont !== undefined) {
+      /* custom font family text box */
+      setPath(state.settings, 'appearance.typography.fontFamily', e.target.value);
+      saveSettings(); applyAppearance(); renderAllBodies();
+    }
+  });
+
+  /* --- drag & drop: dashboard widgets --- */
+  let dragId = null;
+  document.addEventListener('dragstart', e => {
+    const card = e.target.closest && e.target.closest('.widget');
+    const row = e.target.closest && e.target.closest('.dash-row');
+    const li = e.target.closest && e.target.closest('.loc-item[draggable="true"]');
+    if (li) { e.dataTransfer.setData('text/loc', li.dataset.locid); li.classList.add('dragging'); return; }
+    if (row) { e.dataTransfer.setData('text/dash', row.dataset.dash); row.classList.add('dragging'); return; }
+    if (!card) return;
+    if (!e.target.closest('.grip')) { e.preventDefault(); return; }   /* only drag from the grip handle */
+    dragId = card.dataset.widget;
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  document.addEventListener('dragend', () => {
+    $$('.dragging').forEach(x => x.classList.remove('dragging'));
+    $$('.drop-target').forEach(x => x.classList.remove('drop-target'));
+    dragId = null;
+  });
+  document.addEventListener('dragover', e => {
+    const card = e.target.closest && e.target.closest('.widget');
+    const row = e.target.closest && e.target.closest('.dash-row');
+    const li = e.target.closest && e.target.closest('.loc-item[draggable="true"]');
+    if (card && dragId && card.dataset.widget !== dragId) {
+      e.preventDefault(); card.classList.add('drop-target');
+    } else if (row && e.dataTransfer.types.includes('text/dash')) { e.preventDefault(); }
+    else if (li && e.dataTransfer.types.includes('text/loc')) { e.preventDefault(); }
+  });
+  document.addEventListener('dragleave', e => {
+    const c = e.target.closest && e.target.closest('.drop-target');
+    if (c) c.classList.remove('drop-target');
+  });
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    /* locations */
+    const li = e.target.closest && e.target.closest('.loc-item[draggable="true"]');
+    if (li && e.dataTransfer.getData('text/loc')) {
+      const fromId = e.dataTransfer.getData('text/loc');
+      const from = state.locations.findIndex(l => l.id === fromId);
+      const to = state.locations.findIndex(l => l.id === li.dataset.locid);
+      if (from >= 0 && to >= 0 && from !== to) {
+        const [m] = state.locations.splice(from, 1);
+        state.locations.splice(to, 0, m);
+        saveLocations(); buildLocPopover();
+      }
+      return;
+    }
+    /* dashboard settings rows */
+    const row = e.target.closest && e.target.closest('.dash-row');
+    if (row && e.dataTransfer.getData('text/dash')) {
+      const fromId = e.dataTransfer.getData('text/dash');
+      const from = state.settings.dashboard.findIndex(c => c.id === fromId);
+      const to = state.settings.dashboard.findIndex(c => c.id === row.dataset.dash);
+      if (from >= 0 && to >= 0 && from !== to) {
+        const [m] = state.settings.dashboard.splice(from, 1);
+        state.settings.dashboard.splice(to, 0, m);
+        saveDashboard(); buildDashboard(); renderAllBodies(); renderSettingsContent();
+      }
+      return;
+    }
+    /* dashboard cards on the main grid */
+    const card = e.target.closest && e.target.closest('.widget');
+    if (card && dragId && card.dataset.widget !== dragId) {
+      const from = state.settings.dashboard.findIndex(c => c.id === dragId);
+      const to = state.settings.dashboard.findIndex(c => c.id === card.dataset.widget);
+      if (from >= 0 && to >= 0) {
+        const [m] = state.settings.dashboard.splice(from, 1);
+        state.settings.dashboard.splice(to, 0, m);
+        saveDashboard(); buildDashboard(); renderAllBodies();
+      }
+    }
+  });
+
+  /* --- network status --- */
+  window.addEventListener('offline', () => showOffline('You are offline — showing the last available data.', state.lastLoad));
+  window.addEventListener('online', () => { hideOffline(); loadWeather('online'); });
+
+  /* --- redraw canvases on resize --- */
+  window.addEventListener('resize', debounce(() => { drawHourlyGraph(); drawDetailCharts(); fxResize(); }, 150));
+}
+function moveDash(i, dir) {
+  const j = i + dir, arr = state.settings.dashboard;
+  if (j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  saveDashboard(); buildDashboard(); renderAllBodies(); renderSettingsContent();
+}
+
+/* ============================ 28. INIT ============================ */
+function init() {
+  loadAll();
+  $('#brand-icon').innerHTML = iconSvg(2, true);
+  applyAppearance();
+  buildDashboard();
+  bindEvents();
+  renderAllBodies();
+  updateClock();
+  setInterval(updateClock, 1000);
+  startRefreshLoop();
+
+  /* startup location behaviour */
+  if (!state.activeLoc && state.settings.general.startGeolocate && navigator.geolocation) {
+    useMyLocation();
+  } else if (!state.activeLoc && !state.locations.length) {
+    /* sensible built-in default so the app is never blank */
+    loadWeather('init');
+  } else {
+    loadWeather('init');
+  }
+}
+init();
