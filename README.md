@@ -5,7 +5,7 @@ No API key, no backend, no build step, no frameworks — plain HTML/CSS/vanilla 
 
 ## Run it
 **Option A — Go to the website**
-The website is being hosted at [insert link]
+The website is being hosted at https://nexora-weather.vercel.app/
 
 **Option B — just open the file**
 Double-click `index.html` (or drag it into a browser). Everything works over
