@@ -5,7 +5,7 @@ A complete, fully client-side weather application with extreme customization.
 No API key, no backend, no build step, no frameworks — plain HTML/CSS/vanilla JS.
 
 ## Run it
-**Option A — Go to the website**
+**Option A — Go to the website (recommended)**
 The website is being hosted at https://nexora-weather.vercel.app/
 
 **Option B — just open the file**
@@ -14,7 +14,7 @@ Double-click `index.html` (or drag it into a browser). Everything works over
 `fetch()` to third-party APIs in rare local-file configurations. If the page
 looks unstyled or data never loads, use Option B.
 
-**Option C — tiny local server (recommended)**
+**Option C — tiny local server**
 From this folder run any one of:
 
 python3 -m http.server 8000
