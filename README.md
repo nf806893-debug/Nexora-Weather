@@ -4,14 +4,16 @@ A complete, fully client-side weather application with extreme customization.
 No API key, no backend, no build step, no frameworks — plain HTML/CSS/vanilla JS.
 
 ## Run it
+**Option A — Go to the website**
+The website is being hosted at [insert link]
 
-**Option A — just open the file**
+**Option B — just open the file**
 Double-click `index.html` (or drag it into a browser). Everything works over
 `file://` except that some browsers block the Google-Fonts stylesheet or
 `fetch()` to third-party APIs in rare local-file configurations. If the page
 looks unstyled or data never loads, use Option B.
 
-**Option B — tiny local server (recommended)**
+**Option C — tiny local server (recommended)**
 From this folder run any one of:
 
 python3 -m http.server 8000
