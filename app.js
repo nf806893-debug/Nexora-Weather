@@ -1396,7 +1396,7 @@ function renderSettingsContent() {
   else if (cat === 'about') {
     el.innerHTML = '<h3>About Nexora Weather</h3>' +
       '<p>Version ' + APP_VERSION + '</p><br>' +
-      '<p>Nexora Weather is a fully client-side weather application with deep customization: themes, colors, typography, layout, effects, backgrounds, units, widgets and more — all stored locally.</p><br>' +
+      '<p>Nexora Weather is a fully client-side weather application with deep customization: themes, colors, typography, layout, effects, backgrounds, units, widgets and more — all stored locally. Made with Kimi Instant High. Repo: https://github.com/nf806893-debug/Nexora-Weather </p><br>' +
       '<h3>Attribution</h3>' +
       '<p>Weather data © <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a>, licensed under ' +
       '<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>. ' +
